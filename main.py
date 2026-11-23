@@ -19,6 +19,7 @@ under 1 MiB). Only the Python standard library is used.
 
 import os
 import shutil
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,18 +27,44 @@ SRC = os.path.join(HERE, "meme.png")
 OUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 OUT = os.path.join(OUT_DIR, "entry.png")
 
+MAX_BYTES = 1_048_576
+MAX_SIDE = 1024
+
+
+def png_dimensions(path: str) -> tuple:
+    """Read (width, height) from a PNG's IHDR chunk, stdlib only."""
+    with open(path, "rb") as fh:
+        header = fh.read(33)
+    if len(header) < 33 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file")
+    if header[12:16] != b"IHDR":
+        raise ValueError("missing IHDR chunk")
+    width, height = struct.unpack(">II", header[16:24])
+    return width, height
+
 
 def main() -> int:
     if not os.path.isfile(SRC):
         print(f"missing asset: {SRC}", file=sys.stderr)
         return 1
+    # Gate check before writing: the entry must be a whole PNG,
+    # at most 1 MiB and at most 1024 by 1024 pixels.
+    try:
+        width, height = png_dimensions(SRC)
+    except ValueError as exc:
+        print(f"gate failure: {exc}", file=sys.stderr)
+        return 1
+    if width > MAX_SIDE or height > MAX_SIDE:
+        print(f"gate failure: {width}x{height} exceeds {MAX_SIDE}x{MAX_SIDE}",
+              file=sys.stderr)
+        return 1
+    if os.path.getsize(SRC) > MAX_BYTES:
+        print("gate failure: meme.png over 1 MiB", file=sys.stderr)
+        return 1
     os.makedirs(OUT_DIR, exist_ok=True)
     shutil.copyfile(SRC, OUT)
     size = os.path.getsize(OUT)
-    print(f"wrote {OUT} ({size} bytes)")
-    if size > 1_048_576:
-        print("gate failure: entry.png over 1 MiB", file=sys.stderr)
-        return 1
+    print(f"wrote {OUT} ({width}x{height}, {size} bytes)")
     return 0
 
 
